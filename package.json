@@ -1,0 +1,23 @@
+{
+  "name": "gesture-draw",
+  "version": "0.1.0",
+  "description": "Draw shapes and flowcharts with hand gestures as an overlay on Google Meet.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "esbuild tests/smoke.ts --bundle --platform=node --format=esm --outfile=tests/.smoke.mjs && node tests/.smoke.mjs; rm -f tests/.smoke.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.14",
+    "roughjs": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}
