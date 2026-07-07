@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Gesture Draw",
+  "version": "0.1.0",
+  "description": "Draw shapes and flowcharts with hand gestures, overlaid on Google Meet.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://meet.google.com/*"],
+  "background": { "service_worker": "sw.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["models/*", "wasm/*"],
+      "matches": ["https://meet.google.com/*"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gesture Draw"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
