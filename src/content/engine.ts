@@ -22,6 +22,37 @@ type Cmd =
   | { kind: 'clear' }
   | { kind: 'undo' };
 
+// Google Meet enforces Trusted Types (require-trusted-types-for 'script'), so
+// MediaPipe's WASM loader — which assigns a raw string to <script>.src — is
+// blocked. A pass-through *default* policy sanitizes raw-string sink
+// assignments. It only fires for raw strings (Meet's own TT-compliant code
+// never assigns those), so it doesn't alter Meet's behavior. If Meet's CSP
+// allowlists policy names and forbids 'default', createPolicy throws — caught
+// upstream and surfaced, at which point the offscreen-document fallback is next.
+function installTrustedTypesPolicy() {
+  const tt = (window as any).trustedTypes;
+  if (!tt || typeof tt.createPolicy !== 'function') return;
+  if ((window as any).__gdTTInstalled) return;
+  if (tt.defaultPolicy) {
+    (window as any).__gdTTInstalled = true;
+    return;
+  }
+  try {
+    tt.createPolicy('default', {
+      createScriptURL: (s: string) => s,
+      createScript: (s: string) => s,
+      createHTML: (s: string) => s,
+    });
+    (window as any).__gdTTInstalled = true;
+  } catch (e) {
+    throw new Error(
+      `Trusted Types blocked our policy — Meet forbids it. Needs offscreen fallback. (${
+        (e as Error).message
+      })`,
+    );
+  }
+}
+
 class Engine {
   private settings: Settings = { ...DEFAULT_SETTINGS };
   private camera = new CameraManager();
@@ -104,6 +135,7 @@ class Engine {
     this.lastError = undefined;
     this.emitStatus();
     try {
+      installTrustedTypesPolicy();
       await this.tracker.init(this.base() + 'wasm', this.base() + 'models/hand_landmarker.task');
       await this.camera.start();
       this.running = true;
