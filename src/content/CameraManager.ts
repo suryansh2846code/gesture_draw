@@ -26,7 +26,13 @@ export class CameraManager {
     // NOTE: Meet is also using the camera. Most browsers allow multiple
     // consumers of the same device; if this throws, that's the contention
     // risk from the spec — surfaced to the user via the popup.
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    // Use the ORIGINAL getUserMedia (stashed by the engine's patch) so this
+    // tracking stream isn't itself intercepted and composited.
+    const md = navigator.mediaDevices as MediaDevices & {
+      __gdRealGUM?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
+    };
+    const gum = (md.__gdRealGUM ?? md.getUserMedia).bind(md);
+    this.stream = await gum({
       video: { width: 640, height: 480, frameRate: 30, facingMode: 'user' },
       audio: false,
     });

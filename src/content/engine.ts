@@ -1,34 +1,63 @@
 // MAIN-world engine: camera -> hand tracking -> gesture -> draw -> overlay.
 // Runs in the page's main world so MediaPipe's WASM loader (which appends a
-// <script> that runs in the main world) correctly sets ModuleFactory. It has NO
-// access to chrome.* APIs — the isolated "bridge" content script feeds it
-// settings/actions via DOM CustomEvents and the extension base URL via a
-// data-attribute, and it reports status back the same way.
+// <script> that runs in the main world) correctly sets ModuleFactory, and so we
+// can intercept getUserMedia for camera-overlay mode. It has NO access to
+// chrome.* APIs — the isolated "bridge" content script feeds it settings/actions
+// via DOM CustomEvents and the extension base URL via a data-attribute.
 import { CameraManager } from './CameraManager';
+import { CameraCompositor } from './CameraCompositor';
 import { HandTracker } from './HandTracker';
 import { GestureRecognizer, type Gesture, type LM } from './gestures';
 import { OneEuro2D } from './OneEuroFilter';
 import { Renderer } from './Renderer';
 import { snapStroke } from './shapeSnap';
-import { DEFAULT_SETTINGS, type Point, type Settings, type Shape } from './types';
+import { DEFAULT_SETTINGS, type DrawMode, type Point, type RenderState, type Settings, type Shape } from './types';
 
-// DOM event channel names shared with bridge.ts
 const EV_READY = 'gd:engine-ready';
-const EV_CMD = 'gd:cmd'; // bridge -> engine  { kind, ... }
-const EV_STATUS = 'gd:status'; // engine -> bridge { running, error }
+const EV_CMD = 'gd:cmd';
+const EV_STATUS = 'gd:status';
 
 type Cmd =
   | { kind: 'settings'; settings: Partial<Settings> }
   | { kind: 'clear' }
   | { kind: 'undo' };
 
-// Google Meet enforces Trusted Types (require-trusted-types-for 'script'), so
-// MediaPipe's WASM loader — which assigns a raw string to <script>.src — is
-// blocked. A pass-through *default* policy sanitizes raw-string sink
-// assignments. It only fires for raw strings (Meet's own TT-compliant code
-// never assigns those), so it doesn't alter Meet's behavior. If Meet's CSP
-// allowlists policy names and forbids 'default', createPolicy throws — caught
-// upstream and surfaced, at which point the offscreen-document fallback is next.
+// shared with the getUserMedia patch, which is installed at document_start
+// before the Engine (and Meet) exist.
+const controller: {
+  enabled: boolean;
+  mode: DrawMode;
+  makeComposite: ((s: MediaStream) => Promise<MediaStream>) | null;
+} = { enabled: false, mode: DEFAULT_SETTINGS.mode, makeComposite: null };
+
+// Intercept Meet's camera request. In camera mode we return a canvas stream that
+// composites "webcam + drawing"; otherwise we pass the real stream through.
+function patchGetUserMedia() {
+  const md = navigator.mediaDevices as MediaDevices & {
+    __gdPatched?: boolean;
+    __gdRealGUM?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
+  };
+  if (!md || md.__gdPatched) return;
+  const real = md.getUserMedia.bind(md);
+  md.__gdRealGUM = real;
+  md.__gdPatched = true;
+  md.getUserMedia = async (constraints?: MediaStreamConstraints) => {
+    const stream = await real(constraints);
+    try {
+      if (constraints?.video && controller.enabled && controller.mode === 'camera' && controller.makeComposite) {
+        return await controller.makeComposite(stream);
+      }
+    } catch (e) {
+      console.error('[GestureDraw] composite failed, passing raw camera', e);
+    }
+    return stream;
+  };
+}
+
+// Google Meet enforces Trusted Types; MediaPipe's WASM loader assigns a raw
+// string to <script>.src, which is blocked. A pass-through default policy
+// sanitizes raw-string sink assignments (only ones Meet's own compliant code
+// never makes, so it doesn't change Meet's behavior).
 function installTrustedTypesPolicy() {
   const tt = (window as any).trustedTypes;
   if (!tt || typeof tt.createPolicy !== 'function') return;
@@ -45,11 +74,7 @@ function installTrustedTypesPolicy() {
     });
     (window as any).__gdTTInstalled = true;
   } catch (e) {
-    throw new Error(
-      `Trusted Types blocked our policy — Meet forbids it. Needs offscreen fallback. (${
-        (e as Error).message
-      })`,
-    );
+    throw new Error(`Trusted Types blocked our policy — Meet forbids it. (${(e as Error).message})`);
   }
 }
 
@@ -61,9 +86,12 @@ class Engine {
   private cursorFilter = new OneEuro2D(1.2, 0.02);
   private container!: HTMLElement;
   private renderer!: Renderer;
+  private compositor: CameraCompositor | null = null;
 
   private shapes: Shape[] = [];
   private activeStroke: Point[] | null = null;
+  private cursor: Point | null = null;
+  private gesture: Gesture = 'idle';
   private running = false;
   private rafId = 0;
   private lastError: string | undefined;
@@ -72,7 +100,6 @@ class Engine {
   private fps = 0;
   private lastFpsT = performance.now();
 
-  // base like "chrome-extension://<id>/", provided by the bridge
   private base(): string {
     return document.documentElement.dataset.gdBase ?? '';
   }
@@ -83,32 +110,55 @@ class Engine {
     document.documentElement.appendChild(this.container);
     this.renderer = new Renderer(this.container);
 
+    controller.makeComposite = (s) => this.makeComposite(s);
+
     window.addEventListener(EV_CMD, (e) => this.onCmd((e as CustomEvent<Cmd>).detail));
     this.wireKeyboard();
-
-    // tell the bridge we're alive so it sends current settings
     window.dispatchEvent(new CustomEvent(EV_READY));
     this.emitStatus();
   }
 
+  // called by the getUserMedia patch when Meet requests the camera in camera mode
+  private async makeComposite(source: MediaStream): Promise<MediaStream> {
+    this.compositor?.stop();
+    const comp = new CameraCompositor(source, () => this.renderState());
+    const out = await comp.start();
+    this.compositor = comp;
+    // when Meet stops the camera, tear the compositor down
+    source.getVideoTracks()[0]?.addEventListener('ended', () => {
+      if (this.compositor === comp) {
+        comp.stop();
+        this.compositor = null;
+      }
+    });
+    return out;
+  }
+
+  // snapshot the compositor paints each frame — empty unless actively drawing
+  private renderState(): RenderState {
+    const active = this.running && this.settings.mode === 'camera';
+    return {
+      shapes: active ? this.shapes : [],
+      activeStroke: active ? this.activeStroke : null,
+      color: this.settings.color,
+      strokeWidth: this.settings.strokeWidth,
+      cursor: active ? this.cursor : null,
+      gesture: this.gesture,
+    };
+  }
+
   private emitStatus() {
     window.dispatchEvent(
-      new CustomEvent(EV_STATUS, { detail: { running: this.running, error: this.lastError } }),
+      new CustomEvent(EV_STATUS, {
+        detail: { running: this.running, error: this.lastError, mode: this.settings.mode },
+      }),
     );
   }
 
   private onCmd(cmd: Cmd) {
-    switch (cmd.kind) {
-      case 'settings':
-        this.applySettings(cmd.settings);
-        break;
-      case 'clear':
-        this.clearAll();
-        break;
-      case 'undo':
-        this.undo();
-        break;
-    }
+    if (cmd.kind === 'settings') this.applySettings(cmd.settings);
+    else if (cmd.kind === 'clear') this.clearAll();
+    else if (cmd.kind === 'undo') this.undo();
   }
 
   private wireKeyboard() {
@@ -123,16 +173,26 @@ class Engine {
   private async applySettings(patch: Partial<Settings>) {
     const prev = this.settings;
     this.settings = { ...this.settings, ...patch };
+    controller.mode = this.settings.mode;
     if (patch.pinchThreshold !== undefined) this.recognizer.setThreshold(patch.pinchThreshold);
+
+    const modeChanged = patch.mode !== undefined && patch.mode !== prev.mode;
     if (patch.enabled !== undefined && patch.enabled !== prev.enabled) {
       if (patch.enabled) await this.start();
       else this.stop();
+    } else if (modeChanged && this.running) {
+      // switching mode: coordinate spaces differ, so reset the canvas
+      this.clearAll();
+      this.renderer.clearLive();
     }
+    this.emitStatus();
   }
 
   private async start() {
     if (this.running) return;
     this.lastError = undefined;
+    controller.enabled = true;
+    controller.mode = this.settings.mode;
     this.emitStatus();
     try {
       installTrustedTypesPolicy();
@@ -143,6 +203,7 @@ class Engine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       this.running = false;
+      controller.enabled = false;
       console.error('[GestureDraw] start failed:', err);
     }
     this.emitStatus();
@@ -150,11 +211,15 @@ class Engine {
 
   private stop() {
     this.running = false;
+    controller.enabled = false;
     cancelAnimationFrame(this.rafId);
     this.camera.stop();
     this.tracker.close();
     this.activeStroke = null;
+    this.cursor = null;
     this.renderer.clearLive();
+    // NB: leave the compositor running as a plain passthrough so Meet's video
+    // doesn't freeze; it tears down when Meet stops the camera.
     this.emitStatus();
   }
 
@@ -168,9 +233,19 @@ class Engine {
     this.renderer.renderStatic(this.shapes);
   }
 
-  // normalized landmark -> screen px (webcam mirrored so motion feels natural)
-  private toScreen(lm: LM): Point {
-    return { x: (1 - lm.x) * window.innerWidth, y: lm.y * window.innerHeight };
+  // target dimensions + whether to mirror, per mode. null if camera mode has no
+  // compositor yet (Meet hasn't requested the camera through our patch).
+  private targetDims(): { w: number; h: number; mirror: boolean } | null {
+    if (this.settings.mode === 'camera') {
+      if (!this.compositor) return null;
+      return { w: this.compositor.width, h: this.compositor.height, mirror: false };
+    }
+    return { w: window.innerWidth, h: window.innerHeight, mirror: true };
+  }
+
+  private toTarget(lm: LM, dims: { w: number; h: number; mirror: boolean }): Point {
+    const nx = dims.mirror ? 1 - lm.x : lm.x;
+    return { x: nx * dims.w, y: lm.y * dims.h };
   }
 
   private loop = () => {
@@ -179,33 +254,38 @@ class Engine {
     const now = performance.now();
     this.tickFps(now);
 
-    if (!this.camera.ready) return;
-    const landmarks = this.tracker.detect(this.camera.video, now);
+    const camMode = this.settings.mode === 'camera';
+    const dims = this.targetDims();
 
-    let gesture: Gesture = 'idle';
-    let cursor: Point | null = null;
     let debugPts: Point[] | undefined;
-
-    if (landmarks) {
-      const reading = this.recognizer.read(landmarks);
-      gesture = reading.gesture;
-      const raw = this.toScreen(reading.indexTip);
-      cursor = this.cursorFilter.filter(raw.x, raw.y, now);
-      if (this.settings.showDebug) debugPts = landmarks.map((l) => this.toScreen(l));
-      this.updateDrawState(gesture, cursor);
-    } else if (this.activeStroke) {
-      this.commitStroke();
+    if (this.camera.ready && dims) {
+      const landmarks = this.tracker.detect(this.camera.video, now);
+      if (landmarks) {
+        const reading = this.recognizer.read(landmarks);
+        this.gesture = reading.gesture;
+        const raw = this.toTarget(reading.indexTip, dims);
+        this.cursor = this.cursorFilter.filter(raw.x, raw.y, now);
+        if (this.settings.showDebug && !camMode) {
+          debugPts = landmarks.map((l) => this.toTarget(l, dims));
+        }
+        this.updateDrawState(this.gesture, this.cursor);
+      } else if (this.activeStroke) {
+        this.commitStroke();
+      }
     }
 
+    // screen mode paints everything on the overlay; camera mode paints the
+    // drawing on the compositor and keeps only the HUD on screen.
     this.renderer.renderLive({
-      stroke: this.activeStroke,
+      stroke: camMode ? null : this.activeStroke,
       color: this.settings.color,
       strokeWidth: this.settings.strokeWidth,
-      cursor,
-      gesture,
+      cursor: camMode ? null : this.cursor,
+      gesture: this.gesture,
       landmarks: debugPts,
       showDebug: this.settings.showDebug,
       fps: this.fps,
+      mode: this.compositor || !camMode ? this.settings.mode : 'camera (toggle Meet cam)',
     });
   };
 
@@ -226,14 +306,9 @@ class Engine {
     const stroke = this.activeStroke;
     this.activeStroke = null;
     if (!stroke || stroke.length < 3) return;
-    const shape = snapStroke(
-      stroke,
-      this.settings.shapeMode,
-      this.settings.color,
-      this.settings.strokeWidth,
-    );
+    const shape = snapStroke(stroke, this.settings.shapeMode, this.settings.color, this.settings.strokeWidth);
     this.shapes.push(shape);
-    this.renderer.renderStatic(this.shapes);
+    if (this.settings.mode === 'screen') this.renderer.renderStatic(this.shapes);
   }
 
   private tickFps(now: number) {
@@ -246,10 +321,12 @@ class Engine {
   }
 }
 
+// install the getUserMedia patch as early as possible (document_start)
+patchGetUserMedia();
+
 if (!(window as any).__gestureDrawEngine) {
   (window as any).__gestureDrawEngine = true;
   const start = () => new Engine().init();
-  // wait until the bridge has stamped the base URL onto <html>
   if (document.documentElement.dataset.gdBase) start();
   else {
     const obs = new MutationObserver(() => {

@@ -56,6 +56,14 @@ function renderToggle() {
   btn.classList.toggle('off', !settings.enabled);
 }
 
+function renderModeHint() {
+  const el = $('modeHint');
+  el.textContent =
+    settings.mode === 'camera'
+      ? 'Draws on your webcam tile — everyone sees it live. If your camera is already on, toggle it off/on once after switching.'
+      : 'Draws over your whole screen — others see it only when you share your screen.';
+}
+
 async function refreshStatus() {
   const box = $('status');
   const tab = await activeMeetTab();
@@ -87,6 +95,8 @@ async function main() {
 
   renderSwatches();
   renderToggle();
+  renderModeHint();
+  ($('mode') as HTMLSelectElement).value = settings.mode;
   ($('shape') as HTMLSelectElement).value = settings.shapeMode;
   ($('pinch') as HTMLInputElement).value = String(settings.pinchThreshold);
   ($('debug') as HTMLInputElement).checked = settings.showDebug;
@@ -95,6 +105,10 @@ async function main() {
     await save({ enabled: !settings.enabled });
     renderToggle();
     setTimeout(refreshStatus, 400);
+  };
+  $('mode').onchange = async (e) => {
+    await save({ mode: (e.target as HTMLSelectElement).value as any });
+    renderModeHint();
   };
   $('shape').onchange = (e) => save({ shapeMode: (e.target as HTMLSelectElement).value as any });
   $('pinch').onchange = (e) => save({ pinchThreshold: Number((e.target as HTMLInputElement).value) });
