@@ -42,7 +42,8 @@ const common = {
 };
 
 const builds = [
-  { entryPoints: [p('src/content/index.ts')], outfile: p('dist/content.js'), format: 'iife' },
+  { entryPoints: [p('src/content/bridge.ts')], outfile: p('dist/bridge.js'), format: 'iife' },
+  { entryPoints: [p('src/content/engine.ts')], outfile: p('dist/engine.js'), format: 'iife' },
   { entryPoints: [p('src/background/sw.ts')], outfile: p('dist/sw.js'), format: 'iife' },
   { entryPoints: [p('src/popup/popup.ts')], outfile: p('dist/popup.js'), format: 'esm' },
 ];

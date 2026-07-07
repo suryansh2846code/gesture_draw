@@ -1,21 +1,28 @@
-// Content-script orchestrator: camera -> hand tracking -> gesture -> draw state
-// machine -> overlay. Runs entirely on Google Meet pages, on-device.
+// MAIN-world engine: camera -> hand tracking -> gesture -> draw -> overlay.
+// Runs in the page's main world so MediaPipe's WASM loader (which appends a
+// <script> that runs in the main world) correctly sets ModuleFactory. It has NO
+// access to chrome.* APIs — the isolated "bridge" content script feeds it
+// settings/actions via DOM CustomEvents and the extension base URL via a
+// data-attribute, and it reports status back the same way.
 import { CameraManager } from './CameraManager';
 import { HandTracker } from './HandTracker';
 import { GestureRecognizer, type Gesture, type LM } from './gestures';
 import { OneEuro2D } from './OneEuroFilter';
 import { Renderer } from './Renderer';
 import { snapStroke } from './shapeSnap';
-import {
-  DEFAULT_SETTINGS,
-  SETTINGS_KEY,
-  type Msg,
-  type Point,
-  type Settings,
-  type Shape,
-} from './types';
+import { DEFAULT_SETTINGS, type Point, type Settings, type Shape } from './types';
 
-class GestureDraw {
+// DOM event channel names shared with bridge.ts
+const EV_READY = 'gd:engine-ready';
+const EV_CMD = 'gd:cmd'; // bridge -> engine  { kind, ... }
+const EV_STATUS = 'gd:status'; // engine -> bridge { running, error }
+
+type Cmd =
+  | { kind: 'settings'; settings: Partial<Settings> }
+  | { kind: 'clear' }
+  | { kind: 'undo' };
+
+class Engine {
   private settings: Settings = { ...DEFAULT_SETTINGS };
   private camera = new CameraManager();
   private tracker = new HandTracker();
@@ -30,58 +37,47 @@ class GestureDraw {
   private rafId = 0;
   private lastError: string | undefined;
 
-  // fps meter
   private frameCount = 0;
   private fps = 0;
   private lastFpsT = performance.now();
 
-  async init() {
-    this.settings = await this.loadSettings();
-    this.recognizer.setThreshold(this.settings.pinchThreshold);
+  // base like "chrome-extension://<id>/", provided by the bridge
+  private base(): string {
+    return document.documentElement.dataset.gdBase ?? '';
+  }
 
+  init() {
     this.container = document.createElement('div');
     this.container.id = 'gesture-draw-root';
     document.documentElement.appendChild(this.container);
     this.renderer = new Renderer(this.container);
 
-    this.wireMessaging();
+    window.addEventListener(EV_CMD, (e) => this.onCmd((e as CustomEvent<Cmd>).detail));
     this.wireKeyboard();
 
-    if (this.settings.enabled) await this.start();
+    // tell the bridge we're alive so it sends current settings
+    window.dispatchEvent(new CustomEvent(EV_READY));
+    this.emitStatus();
   }
 
-  private async loadSettings(): Promise<Settings> {
-    const got = await chrome.storage.sync.get(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...(got[SETTINGS_KEY] ?? {}) };
+  private emitStatus() {
+    window.dispatchEvent(
+      new CustomEvent(EV_STATUS, { detail: { running: this.running, error: this.lastError } }),
+    );
   }
 
-  private wireMessaging() {
-    chrome.runtime.onMessage.addListener((msg: Msg, _s, reply) => {
-      (async () => {
-        switch (msg.type) {
-          case 'settings:update':
-            await this.applySettings(msg.settings);
-            break;
-          case 'action:clear':
-            this.clearAll();
-            break;
-          case 'action:undo':
-            this.undo();
-            break;
-          case 'action:status':
-            reply({ type: 'status:reply', running: this.running, error: this.lastError });
-            return;
-        }
-        reply({ type: 'status:reply', running: this.running, error: this.lastError });
-      })();
-      return true; // async reply
-    });
-
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'sync' && changes[SETTINGS_KEY]) {
-        this.applySettings(changes[SETTINGS_KEY].newValue ?? {});
-      }
-    });
+  private onCmd(cmd: Cmd) {
+    switch (cmd.kind) {
+      case 'settings':
+        this.applySettings(cmd.settings);
+        break;
+      case 'clear':
+        this.clearAll();
+        break;
+      case 'undo':
+        this.undo();
+        break;
+    }
   }
 
   private wireKeyboard() {
@@ -97,7 +93,6 @@ class GestureDraw {
     const prev = this.settings;
     this.settings = { ...this.settings, ...patch };
     if (patch.pinchThreshold !== undefined) this.recognizer.setThreshold(patch.pinchThreshold);
-
     if (patch.enabled !== undefined && patch.enabled !== prev.enabled) {
       if (patch.enabled) await this.start();
       else this.stop();
@@ -107,8 +102,9 @@ class GestureDraw {
   private async start() {
     if (this.running) return;
     this.lastError = undefined;
+    this.emitStatus();
     try {
-      await this.tracker.init();
+      await this.tracker.init(this.base() + 'wasm', this.base() + 'models/hand_landmarker.task');
       await this.camera.start();
       this.running = true;
       this.loop();
@@ -117,6 +113,7 @@ class GestureDraw {
       this.running = false;
       console.error('[GestureDraw] start failed:', err);
     }
+    this.emitStatus();
   }
 
   private stop() {
@@ -126,6 +123,7 @@ class GestureDraw {
     this.tracker.close();
     this.activeStroke = null;
     this.renderer.clearLive();
+    this.emitStatus();
   }
 
   private clearAll() {
@@ -162,11 +160,9 @@ class GestureDraw {
       const raw = this.toScreen(reading.indexTip);
       cursor = this.cursorFilter.filter(raw.x, raw.y, now);
       if (this.settings.showDebug) debugPts = landmarks.map((l) => this.toScreen(l));
-
       this.updateDrawState(gesture, cursor);
-    } else {
-      // hand left frame: commit any in-progress stroke
-      if (this.activeStroke) this.commitStroke();
+    } else if (this.activeStroke) {
+      this.commitStroke();
     }
 
     this.renderer.renderLive({
@@ -181,12 +177,10 @@ class GestureDraw {
     });
   };
 
-  // IDLE -> DRAWING (pinch) -> SNAP+COMMIT (release). palm = clear.
   private updateDrawState(gesture: Gesture, cursor: Point) {
     if (gesture === 'pinch') {
       if (!this.activeStroke) this.activeStroke = [];
       const last = this.activeStroke[this.activeStroke.length - 1];
-      // drop near-duplicate points to keep strokes light
       if (!last || Math.hypot(cursor.x - last.x, cursor.y - last.y) > 2) {
         this.activeStroke.push(cursor);
       }
@@ -200,7 +194,12 @@ class GestureDraw {
     const stroke = this.activeStroke;
     this.activeStroke = null;
     if (!stroke || stroke.length < 3) return;
-    const shape = snapStroke(stroke, this.settings.shapeMode, this.settings.color, this.settings.strokeWidth);
+    const shape = snapStroke(
+      stroke,
+      this.settings.shapeMode,
+      this.settings.color,
+      this.settings.strokeWidth,
+    );
     this.shapes.push(shape);
     this.renderer.renderStatic(this.shapes);
   }
@@ -215,9 +214,18 @@ class GestureDraw {
   }
 }
 
-// guard against double-injection on SPA navigations
-if (!(window as any).__gestureDrawLoaded) {
-  (window as any).__gestureDrawLoaded = true;
-  const app = new GestureDraw();
-  app.init().catch((e) => console.error('[GestureDraw] init error', e));
+if (!(window as any).__gestureDrawEngine) {
+  (window as any).__gestureDrawEngine = true;
+  const start = () => new Engine().init();
+  // wait until the bridge has stamped the base URL onto <html>
+  if (document.documentElement.dataset.gdBase) start();
+  else {
+    const obs = new MutationObserver(() => {
+      if (document.documentElement.dataset.gdBase) {
+        obs.disconnect();
+        start();
+      }
+    });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-gd-base'] });
+  }
 }

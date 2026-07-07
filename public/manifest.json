@@ -9,8 +9,14 @@
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
-      "js": ["content.js"],
+      "js": ["bridge.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["engine.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [

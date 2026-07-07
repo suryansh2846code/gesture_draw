@@ -1,5 +1,6 @@
 // Wraps MediaPipe Tasks-Vision HandLandmarker. WASM + model are loaded from the
-// bundled extension resources (never Google's CDN) via chrome.runtime.getURL.
+// bundled extension resources (never Google's CDN). Runs in the page MAIN world,
+// so absolute chrome-extension:// URLs are passed in (no chrome.* here).
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import type { LM } from './gestures';
 
@@ -7,11 +8,12 @@ export class HandTracker {
   private landmarker: HandLandmarker | null = null;
   private lastVideoTime = -1;
 
-  async init(): Promise<void> {
-    const fileset = await FilesetResolver.forVisionTasks(chrome.runtime.getURL('wasm'));
+  // wasmBase e.g. "chrome-extension://<id>/wasm", modelUrl the .task file URL
+  async init(wasmBase: string, modelUrl: string): Promise<void> {
+    const fileset = await FilesetResolver.forVisionTasks(wasmBase);
     this.landmarker = await HandLandmarker.createFromOptions(fileset, {
       baseOptions: {
-        modelAssetPath: chrome.runtime.getURL('models/hand_landmarker.task'),
+        modelAssetPath: modelUrl,
         delegate: 'GPU',
       },
       numHands: 1,
