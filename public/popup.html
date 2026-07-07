@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        width: 268px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.4 -apple-system, system-ui, sans-serif;
+        background: #14151a;
+        color: #e8e8ea;
+      }
+      h1 { font-size: 14px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+      .sub { color: #8a8a92; font-size: 11px; margin: 0 0 12px; }
+      .row { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
+      label { color: #c9c9cf; }
+      button {
+        background: #23242c; color: #e8e8ea; border: 1px solid #33343d;
+        border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+      }
+      button:hover { background: #2c2d36; }
+      button.primary { background: #ff375f; border-color: #ff375f; color: #fff; font-weight: 600; }
+      button.primary.off { background: #23242c; border-color: #33343d; color: #e8e8ea; font-weight: 500; }
+      .toggle { width: 100%; padding: 9px; }
+      select, input[type='range'] { background: #23242c; color: #e8e8ea; border: 1px solid #33343d; border-radius: 6px; }
+      select { padding: 4px 6px; }
+      .swatches { display: flex; gap: 6px; }
+      .sw { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+      .sw.active { border-color: #fff; }
+      .actions { display: flex; gap: 8px; margin-top: 6px; }
+      .actions button { flex: 1; }
+      .status { margin-top: 12px; font-size: 11px; padding: 8px; border-radius: 6px; background: #1c1d24; color: #8a8a92; }
+      .status.err { background: #3a1a1f; color: #ff9db0; }
+      .status.ok { color: #86e29a; }
+      .hint { font-size: 10.5px; color: #6f6f78; margin-top: 10px; line-height: 1.5; }
+      kbd { background: #23242c; border: 1px solid #33343d; border-radius: 4px; padding: 0 4px; font-size: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>✍️ Gesture Draw</h1>
+    <p class="sub">Pinch to draw · open palm to clear</p>
+
+    <button id="toggle" class="toggle primary off">Turn On</button>
+
+    <div class="row">
+      <label>Color</label>
+      <div class="swatches" id="swatches"></div>
+    </div>
+
+    <div class="row">
+      <label>Shape</label>
+      <select id="shape">
+        <option value="auto">Auto-snap</option>
+        <option value="free">Freehand</option>
+        <option value="rect">Rectangle</option>
+        <option value="circle">Circle</option>
+        <option value="line">Line</option>
+        <option value="arrow">Arrow</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label>Pinch sensitivity</label>
+      <input id="pinch" type="range" min="0.2" max="0.6" step="0.02" />
+    </div>
+
+    <div class="row">
+      <label>Debug overlay</label>
+      <input id="debug" type="checkbox" />
+    </div>
+
+    <div class="actions">
+      <button id="undo">Undo</button>
+      <button id="clear">Clear all</button>
+    </div>
+
+    <div id="status" class="status">…</div>
+
+    <p class="hint">
+      Only runs on <b>meet.google.com</b>. Share your screen so others see the drawing.<br />
+      Shortcuts: <kbd>C</kbd> clear · <kbd>Z</kbd> undo
+    </p>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
