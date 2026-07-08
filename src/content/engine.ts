@@ -12,7 +12,7 @@ import { OneEuro2D, smoothingToParams } from './OneEuroFilter';
 import { Renderer } from './Renderer';
 import { snapStroke } from './shapeSnap';
 import { shapeHit, pickShape, shapeBBox, translateShape } from './hitTest';
-import { recognizeChar } from './recognize';
+import { recognizeStrokes } from './recognize';
 import { DEFAULT_SETTINGS, type DrawMode, type Handed, type Point, type RenderState, type Settings, type Shape } from './types';
 
 const EV_READY = 'gd:engine-ready';
@@ -516,13 +516,12 @@ class Engine {
     this.strokeBuffer = [];
     this.penUpSince = null;
     if (!strokes.length) return;
-    const combined = strokes.flat();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of combined) {
+    for (const s of strokes) for (const p of s) {
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
     }
-    const rec = recognizeChar(combined);
+    const rec = recognizeStrokes(strokes);
     if (rec) {
       const h = Math.max(maxY - minY, 28);
       this.shapes.push({ kind: 'text', x: minX, y: minY, h, text: rec.char, color: this.settings.color });
