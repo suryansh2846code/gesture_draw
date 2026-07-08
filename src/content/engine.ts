@@ -103,6 +103,7 @@ class Engine {
   private recognizers = new Map<Handed, GestureRecognizer>();
   // 1€ filter driven by the "Smoothing" slider (see smoothingToParams).
   private cursorFilter = new OneEuro2D();
+  private grabFilter = new OneEuro2D(); // palm anchor while grabbing
   private container!: HTMLElement;
   private renderer!: Renderer;
   private compositor: CameraCompositor | null = null;
@@ -267,6 +268,7 @@ class Engine {
     if (patch.smoothing !== undefined) {
       const p = smoothingToParams(patch.smoothing);
       this.cursorFilter.setParams(p.minCutoff, p.beta);
+      this.grabFilter.setParams(p.minCutoff, p.beta);
     }
 
     const modeChanged = patch.mode !== undefined && patch.mode !== prev.mode;
@@ -400,10 +402,12 @@ class Engine {
             this.endGrab();
             this.penUpSince = null;
             this.drawPoint(this.cursor);
-          } else if (r.gesture === 'pinch') {
+          } else if (!r.indexUp) {
+            // closed hand -> grab, anchored on the palm (index is curled)
             this.penUpSince = null;
             this.forceComplete();
-            this.grabMove(this.cursor);
+            const palm = this.toTarget(drawHand.landmarks[9], dims);
+            this.grabMove(this.grabFilter.filter(palm.x, palm.y, now));
           } else {
             this.endGrab();
             this.penUp(now);
