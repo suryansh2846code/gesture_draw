@@ -28,6 +28,7 @@ export interface GestureReading {
   gesture: Gesture;
   pinchDist: number; // normalized thumb-index distance
   indexTip: LM;
+  indexUp: boolean; // index extended (the primary draw/erase signal)
 }
 
 // Hysteresis: pinch is "sticky" once engaged so it doesn't flicker at the edge.
@@ -68,6 +69,6 @@ export class GestureRecognizer {
       gesture = 'idle';
     }
 
-    return { gesture, pinchDist, indexTip: lm[8] };
+    return { gesture, pinchDist, indexTip: lm[8], indexUp: indexExt };
   }
 }

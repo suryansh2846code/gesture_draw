@@ -23,6 +23,11 @@ export class OneEuro {
     private dCutoff = 1.0,
   ) {}
 
+  setParams(minCutoff: number, beta: number) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+  }
+
   private alpha(cutoff: number, dt: number): number {
     const tau = 1 / (2 * Math.PI * cutoff);
     return 1 / (1 + tau / dt);
@@ -55,7 +60,22 @@ export class OneEuro2D {
     this.fx = new OneEuro(minCutoff, beta);
     this.fy = new OneEuro(minCutoff, beta);
   }
+  setParams(minCutoff: number, beta: number) {
+    this.fx.setParams(minCutoff, beta);
+    this.fy.setParams(minCutoff, beta);
+  }
   filter(x: number, y: number, t: number): { x: number; y: number } {
     return { x: this.fx.filter(x, t), y: this.fy.filter(y, t) };
   }
+}
+
+// Map a 0..1 "smoothness" dial to 1€ filter params. Higher = steadier (less
+// jitter, a little more lag); lower = more responsive. Cutoff dominates rest
+// jitter, so it's the main lever.
+export function smoothingToParams(s: number): { minCutoff: number; beta: number } {
+  const t = Math.min(1, Math.max(0, s));
+  return {
+    minCutoff: 2.2 - 1.9 * t, // 2.2 (snappy) -> 0.3 (very smooth)
+    beta: 0.05 - 0.045 * t, // 0.05 -> 0.005
+  };
 }

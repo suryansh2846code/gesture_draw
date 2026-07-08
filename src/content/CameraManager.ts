@@ -28,6 +28,8 @@ export class CameraManager {
     // risk from the spec — surfaced to the user via the popup.
     // Use the ORIGINAL getUserMedia (stashed by the engine's patch) so this
     // tracking stream isn't itself intercepted and composited.
+    // the element is removed on stop(); re-attach if we're starting again
+    if (!this.video.isConnected) document.documentElement.appendChild(this.video);
     const md = navigator.mediaDevices as MediaDevices & {
       __gdRealGUM?: (c?: MediaStreamConstraints) => Promise<MediaStream>;
     };

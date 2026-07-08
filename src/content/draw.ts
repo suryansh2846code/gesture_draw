@@ -1,21 +1,16 @@
 // Shared drawing primitives, used by both the screen overlay (Renderer) and the
-// camera compositor (CameraCompositor). Given a Rough.js canvas (for committed
-// shapes) and a raw 2D context (for the live stroke / cursor / HUD).
+// camera compositor (CameraCompositor). Given a Rough.js canvas (for geometric
+// shapes) and a raw 2D context (for freehand + live stroke + cursor + HUD).
 import type { RoughCanvas } from 'roughjs/bin/canvas';
 import type { Point, Shape } from './types';
 import type { Gesture } from './gestures';
 
-export function drawShape(rc: RoughCanvas, s: Shape) {
-  const color = (s as any).color as string;
-  const opts = { stroke: color, strokeWidth: 3, roughness: 1.1, bowing: 1 };
+export function drawShape(rc: RoughCanvas, ctx: CanvasRenderingContext2D, s: Shape) {
+  const opts = { stroke: (s as any).color, strokeWidth: 3, roughness: 1.1, bowing: 1 };
   switch (s.kind) {
     case 'free':
-      if (s.pts.length < 2) return;
-      rc.linearPath(s.pts.map((p) => [p.x, p.y]) as [number, number][], {
-        stroke: s.color,
-        strokeWidth: s.w,
-        roughness: 0.8,
-      });
+      // freehand is a real pen line, not a sketchy Rough path -> smooth + solid
+      drawSmoothStroke(ctx, s.pts, s.color, s.w);
       break;
     case 'rect':
       rc.rectangle(s.x, s.y, s.w, s.h, opts);
@@ -29,7 +24,18 @@ export function drawShape(rc: RoughCanvas, s: Shape) {
     case 'arrow':
       drawArrow(rc, s.from, s.to, s.color);
       break;
+    case 'text':
+      ctx.fillStyle = s.color;
+      ctx.textBaseline = 'top';
+      ctx.font = `600 ${s.h}px system-ui, -apple-system, sans-serif`;
+      ctx.fillText(s.text, s.x, s.y);
+      break;
   }
+}
+
+// approx rendered width of a text shape (for hit-testing / bbox)
+export function textWidth(s: { text: string; h: number }): number {
+  return Math.max(s.h * 0.62, s.text.length * s.h * 0.62);
 }
 
 export function drawArrow(rc: RoughCanvas, from: Point, to: Point, color: string) {
@@ -46,30 +52,79 @@ export function drawArrow(rc: RoughCanvas, from: Point, to: Point, color: string
   }
 }
 
-export function drawLiveStroke(ctx: CanvasRenderingContext2D, pts: Point[], color: string, w: number) {
-  if (pts.length < 2) return;
-  ctx.beginPath();
+// Smooth, solid pen stroke. Draws quadratic curves through the midpoints of
+// consecutive samples, which turns a sparse/angular polyline into a continuous
+// smooth line — the fix for "gaps between lines" on fast strokes.
+export function drawSmoothStroke(
+  ctx: CanvasRenderingContext2D,
+  pts: Point[],
+  color: string,
+  w: number,
+) {
+  if (pts.length === 0) return;
   ctx.strokeStyle = color;
+  ctx.fillStyle = color;
   ctx.lineWidth = w;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
+
+  if (pts.length === 1) {
+    ctx.beginPath();
+    ctx.arc(pts[0].x, pts[0].y, w / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
-  for (const p of pts) ctx.lineTo(p.x, p.y);
+  for (let i = 1; i < pts.length - 1; i++) {
+    const midX = (pts[i].x + pts[i + 1].x) / 2;
+    const midY = (pts[i].y + pts[i + 1].y) / 2;
+    ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+  }
+  const last = pts[pts.length - 1];
+  ctx.lineTo(last.x, last.y);
   ctx.stroke();
 }
 
 export function drawCursor(ctx: CanvasRenderingContext2D, cursor: Point, drawing: boolean, color: string) {
   ctx.beginPath();
-  ctx.arc(cursor.x, cursor.y, drawing ? 9 : 13, 0, Math.PI * 2);
+  ctx.arc(cursor.x, cursor.y, drawing ? 8 : 12, 0, Math.PI * 2);
   ctx.strokeStyle = drawing ? color : 'rgba(255,255,255,0.9)';
   ctx.lineWidth = 2;
   ctx.stroke();
   if (drawing) {
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(cursor.x, cursor.y, 4, 0, Math.PI * 2);
+    ctx.arc(cursor.x, cursor.y, 3, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+export function drawEraser(ctx: CanvasRenderingContext2D, p: Point, r: number) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.setLineDash([5, 4]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+export function drawSelection(
+  ctx: CanvasRenderingContext2D,
+  box: { x: number; y: number; w: number; h: number },
+) {
+  const pad = 8;
+  ctx.save();
+  ctx.strokeStyle = '#0a84ff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(box.x - pad, box.y - pad, box.w + pad * 2, box.h + pad * 2);
+  ctx.restore();
 }
 
 export function drawLandmarks(ctx: CanvasRenderingContext2D, pts: Point[]) {

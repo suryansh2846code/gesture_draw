@@ -5,7 +5,7 @@ import rough from 'roughjs';
 import type { RoughCanvas } from 'roughjs/bin/canvas';
 import type { Point, Shape } from './types';
 import type { Gesture } from './gestures';
-import { drawShape, drawLiveStroke, drawCursor, drawLandmarks, drawHUD } from './draw';
+import { drawShape, drawSmoothStroke, drawCursor, drawEraser, drawSelection, drawLandmarks, drawHUD } from './draw';
 
 export class Renderer {
   private staticCanvas: HTMLCanvasElement;
@@ -51,7 +51,7 @@ export class Renderer {
 
   renderStatic(shapes: Shape[]) {
     this.sctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    for (const s of shapes) drawShape(this.rc, s);
+    for (const s of shapes) drawShape(this.rc, this.sctx, s);
   }
 
   renderLive(opts: {
@@ -59,6 +59,9 @@ export class Renderer {
     color: string;
     strokeWidth: number;
     cursor: Point | null;
+    eraseCursor?: Point | null;
+    eraseRadius?: number;
+    selection?: { x: number; y: number; w: number; h: number } | null;
     gesture: Gesture;
     landmarks?: Point[];
     showDebug: boolean;
@@ -67,9 +70,11 @@ export class Renderer {
   }) {
     const ctx = this.lctx;
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    if (opts.stroke) drawLiveStroke(ctx, opts.stroke, opts.color, opts.strokeWidth);
+    if (opts.selection) drawSelection(ctx, opts.selection);
+    if (opts.stroke) drawSmoothStroke(ctx, opts.stroke, opts.color, opts.strokeWidth);
     if (opts.showDebug && opts.landmarks) drawLandmarks(ctx, opts.landmarks);
-    if (opts.cursor) drawCursor(ctx, opts.cursor, opts.gesture === 'pinch', opts.color);
+    if (opts.eraseCursor) drawEraser(ctx, opts.eraseCursor, opts.eraseRadius ?? 24);
+    if (opts.cursor) drawCursor(ctx, opts.cursor, !!opts.stroke, opts.color);
     if (opts.showDebug) drawHUD(ctx, opts.gesture, opts.fps, opts.mode);
   }
 

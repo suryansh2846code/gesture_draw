@@ -42,7 +42,7 @@
   </head>
   <body>
     <h1>✍️ Gesture Draw</h1>
-    <p class="sub">Pinch to draw · open palm to clear</p>
+    <p class="sub">Index finger up to draw · other hand erases</p>
 
     <button id="toggle" class="toggle primary off">Turn On</button>
 
@@ -61,15 +61,29 @@
     </div>
 
     <div class="row">
+      <label>Draw hand</label>
+      <select id="drawHand">
+        <option value="Right">Right (left erases)</option>
+        <option value="Left">Left (right erases)</option>
+      </select>
+    </div>
+
+    <div class="row">
       <label>Shape</label>
       <select id="shape">
         <option value="auto">Auto-snap</option>
         <option value="free">Freehand</option>
+        <option value="text">Text (A–Z, 0–9)</option>
         <option value="rect">Rectangle</option>
         <option value="circle">Circle</option>
         <option value="line">Line</option>
         <option value="arrow">Arrow</option>
       </select>
+    </div>
+
+    <div class="row">
+      <label>Smoothing</label>
+      <input id="smoothing" type="range" min="0" max="1" step="0.05" />
     </div>
 
     <div class="row">

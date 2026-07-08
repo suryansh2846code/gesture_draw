@@ -97,7 +97,9 @@ async function main() {
   renderToggle();
   renderModeHint();
   ($('mode') as HTMLSelectElement).value = settings.mode;
+  ($('drawHand') as HTMLSelectElement).value = settings.drawHand;
   ($('shape') as HTMLSelectElement).value = settings.shapeMode;
+  ($('smoothing') as HTMLInputElement).value = String(settings.smoothing);
   ($('pinch') as HTMLInputElement).value = String(settings.pinchThreshold);
   ($('debug') as HTMLInputElement).checked = settings.showDebug;
 
@@ -110,7 +112,9 @@ async function main() {
     await save({ mode: (e.target as HTMLSelectElement).value as any });
     renderModeHint();
   };
+  $('drawHand').onchange = (e) => save({ drawHand: (e.target as HTMLSelectElement).value as any });
   $('shape').onchange = (e) => save({ shapeMode: (e.target as HTMLSelectElement).value as any });
+  $('smoothing').onchange = (e) => save({ smoothing: Number((e.target as HTMLInputElement).value) });
   $('pinch').onchange = (e) => save({ pinchThreshold: Number((e.target as HTMLInputElement).value) });
   $('debug').onchange = (e) => save({ showDebug: (e.target as HTMLInputElement).checked });
   $('undo').onclick = () => sendToTab({ type: 'action:undo' });
