@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
 // they aren't re-rasterized every frame.)
 export interface RenderState {
   activeStroke: Point[] | null;
+  bufferStrokes: Point[][]; // finished strokes awaiting character recognition
   color: string;
   strokeWidth: number;
   cursor: Point | null;

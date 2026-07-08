@@ -24,6 +24,12 @@ type Cmd =
   | { kind: 'clear' }
   | { kind: 'undo' };
 
+// A brief pen-up ends a stroke (tolerates finger-tracking flicker mid-stroke).
+const PEN_LIFT_MS = 180;
+// A longer pause means the character is finished -> recognize it (Text mode).
+// This is what stops it from "guessing before you've finished".
+const CHAR_COMPLETE_MS = 650;
+
 // shared with the getUserMedia patch, which is installed at document_start
 // before the Engine (and Meet) exist.
 const controller: {
@@ -104,6 +110,9 @@ class Engine {
 
   private shapes: Shape[] = [];
   private activeStroke: Point[] | null = null;
+  // strokes waiting to be recognized as one (multi-stroke) character
+  private strokeBuffer: Point[][] = [];
+  private penUpSince: number | null = null;
   private cursor: Point | null = null;
   private eraseCursor: Point | null = null;
   private eraseRadius = 24;
@@ -187,6 +196,7 @@ class Engine {
     const active = this.running && this.settings.mode === 'camera';
     return {
       activeStroke: active ? this.activeStroke : null,
+      bufferStrokes: active ? this.strokeBuffer : [],
       color: this.settings.color,
       strokeWidth: this.settings.strokeWidth,
       cursor: active ? this.cursor : null,
@@ -321,6 +331,8 @@ class Engine {
     this.camera.stop();
     this.tracker.close();
     this.activeStroke = null;
+    this.strokeBuffer = [];
+    this.penUpSince = null;
     this.cursor = null;
     this.renderer.clearLive();
     this.banner.style.display = 'none';
@@ -331,6 +343,9 @@ class Engine {
 
   private clearAll() {
     this.shapes = [];
+    this.activeStroke = null;
+    this.strokeBuffer = [];
+    this.penUpSince = null;
     this.renderCommitted();
   }
 
@@ -374,7 +389,8 @@ class Engine {
         const eraseHand = hands.find((h) => h.handedness !== this.settings.drawHand);
         handInfo = hands.map((h) => h.handedness[0]).join('+') || 'no hands';
 
-        // DRAW HAND: pointing (only index up) = pen down, else lift & commit
+        // DRAW HAND: pointing (index up) = draw. Closed hand (index down) =
+        // grab & move a shape. Open/other = pen up.
         if (drawHand) {
           const r = this.recognizerFor(drawHand.handedness).read(drawHand.landmarks);
           this.gesture = r.gesture;
@@ -382,20 +398,22 @@ class Engine {
           this.cursor = this.cursorFilter.filter(raw.x, raw.y, now);
           if (r.gesture === 'point') {
             this.endGrab();
+            this.penUpSince = null;
             this.drawPoint(this.cursor);
           } else if (r.gesture === 'pinch') {
-            this.liftPen();
+            this.penUpSince = null;
+            this.forceComplete();
             this.grabMove(this.cursor);
           } else {
-            this.liftPen();
             this.endGrab();
+            this.penUp(now);
           }
           if (this.settings.showDebug && !camMode) {
             debugPts = drawHand.landmarks.map((l) => this.toTarget(l, dims));
           }
         } else {
-          this.liftPen();
           this.endGrab();
+          this.penUp(now);
           this.cursor = null;
           this.gesture = 'idle';
         }
@@ -410,7 +428,7 @@ class Engine {
         }
       }
     } else {
-      this.liftPen();
+      this.penUp(now);
     }
 
     // camera mode with no compositor yet -> Meet hasn't routed the camera
@@ -431,6 +449,7 @@ class Engine {
     // drawing on the compositor and keeps only the HUD on screen.
     this.renderer.renderLive({
       stroke: camMode ? null : this.activeStroke,
+      bufferStrokes: camMode ? [] : this.strokeBuffer,
       color: this.settings.color,
       strokeWidth: this.settings.strokeWidth,
       cursor: camMode ? null : this.cursor,
@@ -453,8 +472,63 @@ class Engine {
     }
   }
 
-  private liftPen() {
-    if (this.activeStroke) this.commitStroke();
+  // Called every frame the pen is up. A short pause ends the current stroke
+  // (flicker-tolerant); in Text mode a longer pause finalizes the character.
+  private penUp(now: number) {
+    if (this.penUpSince === null) this.penUpSince = now;
+    const dt = now - this.penUpSince;
+    if (this.activeStroke && dt >= PEN_LIFT_MS) this.endStroke();
+    if (this.settings.shapeMode === 'text' && this.strokeBuffer.length && dt >= CHAR_COMPLETE_MS) {
+      this.recognizeBuffer();
+    }
+  }
+
+  // finalize the active stroke: buffer it (Text mode, wait for the char) or
+  // commit it as a shape immediately (all other modes).
+  private endStroke() {
+    const s = this.activeStroke;
+    this.activeStroke = null;
+    if (!s || s.length < 2) return;
+    if (this.settings.shapeMode === 'text') this.strokeBuffer.push(s);
+    else this.commitShape(s);
+  }
+
+  // force any in-progress character/stroke to finish now (e.g. before a grab)
+  private forceComplete() {
+    if (this.activeStroke) this.endStroke();
+    if (this.strokeBuffer.length) this.recognizeBuffer();
+  }
+
+  private commitShape(stroke: Point[]) {
+    if (stroke.length < 3) return;
+    const mode = this.settings.shapeMode === 'text' ? 'free' : this.settings.shapeMode;
+    this.shapes.push(snapStroke(stroke, mode, this.settings.color, this.settings.strokeWidth));
+    this.renderCommitted();
+  }
+
+  // recognize the buffered (possibly multi-) strokes as one character.
+  private recognizeBuffer() {
+    const strokes = this.strokeBuffer;
+    this.strokeBuffer = [];
+    this.penUpSince = null;
+    if (!strokes.length) return;
+    const combined = strokes.flat();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of combined) {
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+    }
+    const rec = recognizeChar(combined);
+    if (rec) {
+      const h = Math.max(maxY - minY, 28);
+      this.shapes.push({ kind: 'text', x: minX, y: minY, h, text: rec.char, color: this.settings.color });
+    } else {
+      // couldn't read it -> keep the ink as freehand so nothing is lost
+      for (const s of strokes) {
+        if (s.length >= 2) this.shapes.push({ kind: 'free', pts: s, color: this.settings.color, w: this.settings.strokeWidth });
+      }
+    }
+    this.renderCommitted();
   }
 
   private eraseAt(p: Point) {
@@ -488,34 +562,6 @@ class Engine {
   private endGrab() {
     this.selectedIdx = -1;
     this.grabPrev = null;
-  }
-
-  private commitStroke() {
-    const stroke = this.activeStroke;
-    this.activeStroke = null;
-    if (!stroke || stroke.length < 3) return;
-
-    // Text mode: recognize the stroke as a letter/number and replace it with
-    // clean typed text. Unrecognized strokes fall back to freehand.
-    if (this.settings.shapeMode === 'text') {
-      const rec = recognizeChar(stroke);
-      if (rec) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const p of stroke) {
-          minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-        }
-        const h = Math.max(maxY - minY, 28);
-        this.shapes.push({ kind: 'text', x: minX, y: minY, h, text: rec.char, color: this.settings.color });
-        this.renderCommitted();
-        return;
-      }
-    }
-
-    const mode = this.settings.shapeMode === 'text' ? 'free' : this.settings.shapeMode;
-    const shape = snapStroke(stroke, mode, this.settings.color, this.settings.strokeWidth);
-    this.shapes.push(shape);
-    this.renderCommitted();
   }
 
   private tickFps(now: number) {

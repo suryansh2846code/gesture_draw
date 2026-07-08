@@ -86,6 +86,7 @@ export class CameraCompositor {
     ctx.drawImage(this.ink, 0, 0);
     const s = this.getState();
     if (s.selection) drawSelection(ctx, s.selection);
+    for (const bs of s.bufferStrokes) drawSmoothStroke(ctx, bs, s.color, s.strokeWidth);
     if (s.activeStroke) drawSmoothStroke(ctx, s.activeStroke, s.color, s.strokeWidth);
     if (s.eraseCursor) drawEraser(ctx, s.eraseCursor, s.eraseRadius);
     if (s.cursor) drawCursor(ctx, s.cursor, !!s.activeStroke, s.color);

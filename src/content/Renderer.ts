@@ -56,6 +56,7 @@ export class Renderer {
 
   renderLive(opts: {
     stroke: Point[] | null;
+    bufferStrokes?: Point[][];
     color: string;
     strokeWidth: number;
     cursor: Point | null;
@@ -71,6 +72,7 @@ export class Renderer {
     const ctx = this.lctx;
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
     if (opts.selection) drawSelection(ctx, opts.selection);
+    for (const bs of opts.bufferStrokes ?? []) drawSmoothStroke(ctx, bs, opts.color, opts.strokeWidth);
     if (opts.stroke) drawSmoothStroke(ctx, opts.stroke, opts.color, opts.strokeWidth);
     if (opts.showDebug && opts.landmarks) drawLandmarks(ctx, opts.landmarks);
     if (opts.eraseCursor) drawEraser(ctx, opts.eraseCursor, opts.eraseRadius ?? 24);
