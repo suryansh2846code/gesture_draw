@@ -521,10 +521,15 @@ class Engine {
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
     }
-    const rec = recognizeStrokes(strokes);
+    // Camera mode records strokes in the un-mirrored camera frame, but you draw
+    // watching your mirrored self-view — so flip x before recognizing to match
+    // the character you actually drew, and mirror the rendered glyph to match.
+    const cam = this.settings.mode === 'camera';
+    const forRec = cam ? strokes.map((s) => s.map((p) => ({ x: -p.x, y: p.y }))) : strokes;
+    const rec = recognizeStrokes(forRec);
     if (rec) {
       const h = Math.max(maxY - minY, 28);
-      this.shapes.push({ kind: 'text', x: minX, y: minY, h, text: rec.char, color: this.settings.color });
+      this.shapes.push({ kind: 'text', x: minX, y: minY, h, text: rec.char, color: this.settings.color, mirror: cam });
     } else {
       // couldn't read it -> keep the ink as freehand so nothing is lost
       for (const s of strokes) {

@@ -24,12 +24,23 @@ export function drawShape(rc: RoughCanvas, ctx: CanvasRenderingContext2D, s: Sha
     case 'arrow':
       drawArrow(rc, s.from, s.to, s.color);
       break;
-    case 'text':
+    case 'text': {
+      ctx.save();
       ctx.fillStyle = s.color;
       ctx.textBaseline = 'top';
       ctx.font = `600 ${s.h}px system-ui, -apple-system, sans-serif`;
-      ctx.fillText(s.text, s.x, s.y);
+      if (s.mirror) {
+        // camera mode: mirror the glyph so it reads correctly in the (mirrored)
+        // self-view, matching how freehand ink already looks to the drawer.
+        ctx.translate(s.x + textWidth(s), 0);
+        ctx.scale(-1, 1);
+        ctx.fillText(s.text, 0, s.y);
+      } else {
+        ctx.fillText(s.text, s.x, s.y);
+      }
+      ctx.restore();
       break;
+    }
   }
 }
 

@@ -10,7 +10,7 @@ export type Shape =
   | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string }
   | { kind: 'circle'; cx: number; cy: number; r: number; color: string }
   | { kind: 'line' | 'arrow'; from: Point; to: Point; color: string }
-  | { kind: 'text'; x: number; y: number; h: number; text: string; color: string };
+  | { kind: 'text'; x: number; y: number; h: number; text: string; color: string; mirror?: boolean };
 
 export type ShapeMode = 'auto' | 'free' | 'rect' | 'circle' | 'line' | 'arrow' | 'text';
 
